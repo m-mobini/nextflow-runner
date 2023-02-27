@@ -1,0 +1,942 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.14.85.62628",
+      "templateHash": "17734783725135000509"
+    }
+  },
+  "parameters": {
+    "prefix": {
+      "type": "string",
+      "defaultValue": "[format('nfr-{0}', uniqueString(resourceGroup().id))]"
+    },
+    "tagVersion": {
+      "type": "string",
+      "defaultValue": "nfr-version:v1.2.0"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "sqlDatabaseName": {
+      "type": "string",
+      "defaultValue": "nfr-DB"
+    },
+    "sqlAdminUserName": {
+      "type": "string",
+      "defaultValue": "nfr-admin"
+    },
+    "storagePassphrase": {
+      "type": "securestring",
+      "metadata": {
+        "description": "A shared passphrase that allow users to upload files in the UI"
+      }
+    },
+    "sqlAdminPassword": {
+      "type": "securestring"
+    },
+    "azureClientId": {
+      "type": "securestring"
+    },
+    "azureClientSecret": {
+      "type": "securestring"
+    },
+    "keyvaultSpnObjectId": {
+      "type": "securestring"
+    },
+    "environmentType": {
+      "type": "string",
+      "allowedValues": [
+        "nonprod",
+        "prod"
+      ]
+    }
+  },
+  "variables": {
+    "cleanPrefix": "[replace(parameters('prefix'), '-', '')]",
+    "sqlServerName": "[format('{0}-sqlserver', parameters('prefix'))]",
+    "nfRunnerAPIAppPlanName": "[format('{0}-appPlan', parameters('prefix'))]",
+    "nfRunnerAPIAppName": "[format('{0}-api', parameters('prefix'))]",
+    "nfRunnerFunctionAppName": "[format('{0}-serverless', parameters('prefix'))]",
+    "nfRunnerFuctionsAppPlanName": "[format('{0}-serverlessPlan', parameters('prefix'))]",
+    "nfRunnerFunctionAppStorageName": "[if(greater(add(length(variables('cleanPrefix')), 6), 24), substring(format('{0}funcsa', variables('cleanPrefix')), 0, 24), format('{0}funcsa', variables('cleanPrefix')))]",
+    "batchAccountName": "[if(greater(add(length(variables('cleanPrefix')), 5), 24), substring(format('{0}batch', variables('cleanPrefix')), 0, 24), format('{0}batch', variables('cleanPrefix')))]",
+    "batchStorageName": "[if(greater(add(length(variables('cleanPrefix')), 7), 24), substring(format('{0}batchsa', variables('cleanPrefix')), 0, 24), format('{0}batchsa', variables('cleanPrefix')))]",
+    "keyVaultName": "[if(greater(add(length(variables('cleanPrefix')), 2), 24), substring(format('{0}kv', variables('cleanPrefix')), 0, 24), format('{0}kv', variables('cleanPrefix')))]",
+    "tenantId": "[subscription().tenantId]",
+    "roleName": "Key Vault Secrets Officer",
+    "roleIdMapping": {
+      "Key Vault Administrator": "00482a5a-887f-4fb3-b363-3b7fe8e74483",
+      "Key Vault Certificates Officer": "a4417e6f-fecd-4de8-b567-7b0420556985",
+      "Key Vault Crypto Officer": "14b46e9e-c2b7-41b4-b07b-48a6ebf60603",
+      "Key Vault Crypto Service Encryption User": "e147488a-f6f5-4113-8e2d-b22465e65bf6",
+      "Key Vault Crypto User": "12338af0-0e69-4776-bea7-57ae8d297424",
+      "Key Vault Reader": "21090545-7ca7-4776-b22c-e363652d74d2",
+      "Key Vault Secrets Officer": "b86a8fe4-44ce-4948-aee5-eccb2c155cd7",
+      "Key Vault Secrets User": "4633458b-17de-408a-b874-0445c86b69e6"
+    },
+    "tagKvp": "[split(parameters('tagVersion'), ':')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2021-04-01-preview",
+      "name": "[variables('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "[format('{0}', variables('tagKvp')[0])]": "[variables('tagKvp')[1]]"
+      },
+      "properties": {
+        "sku": {
+          "name": "standard",
+          "family": "A"
+        },
+        "tenantId": "[variables('tenantId')]",
+        "enabledForTemplateDeployment": true,
+        "enableRbacAuthorization": true,
+        "networkAcls": {
+          "defaultAction": "Allow",
+          "bypass": "AzureServices"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2020-04-01-preview",
+      "scope": "[format('Microsoft.KeyVault/vaults/{0}', variables('keyVaultName'))]",
+      "name": "[guid(variables('roleIdMapping')[variables('roleName')], parameters('keyvaultSpnObjectId'), resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roleIdMapping')[variables('roleName')])]",
+        "principalId": "[parameters('keyvaultSpnObjectId')]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2020-10-01",
+      "name": "hackAPI-database",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "tagVersion": {
+            "value": "[parameters('tagVersion')]"
+          },
+          "environmentType": {
+            "value": "[parameters('environmentType')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "sqlAdminUserName": {
+            "value": "[parameters('sqlAdminUserName')]"
+          },
+          "sqlAdminPassword": {
+            "value": "[parameters('sqlAdminPassword')]"
+          },
+          "sqlDatabaseName": {
+            "value": "[parameters('sqlDatabaseName')]"
+          },
+          "sqlServerName": {
+            "value": "[variables('sqlServerName')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.14.85.62628",
+              "templateHash": "7242400629934069238"
+            }
+          },
+          "parameters": {
+            "sqlDatabaseName": {
+              "type": "string"
+            },
+            "sqlServerName": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]"
+            },
+            "tagVersion": {
+              "type": "string"
+            },
+            "sqlAdminUserName": {
+              "type": "string"
+            },
+            "sqlAdminPassword": {
+              "type": "securestring"
+            },
+            "environmentType": {
+              "type": "string",
+              "allowedValues": [
+                "nonprod",
+                "prod"
+              ]
+            }
+          },
+          "variables": {
+            "databaseSkuName": "[if(equals(parameters('environmentType'), 'prod'), 'S1', 'Basic')]",
+            "databaseTierName": "[if(equals(parameters('environmentType'), 'prod'), 'Standard', 'Basic')]",
+            "tagName": "[split(parameters('tagVersion'), ':')[0]]",
+            "tagValue": "[split(parameters('tagVersion'), ':')[1]]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Sql/servers/firewallRules",
+              "apiVersion": "2021-02-01-preview",
+              "name": "[format('{0}/{1}', parameters('sqlServerName'), 'AllowAllWindowsAzureIps')]",
+              "properties": {
+                "startIpAddress": "0.0.0.0",
+                "endIpAddress": "0.0.0.0"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Sql/servers', parameters('sqlServerName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Sql/servers",
+              "apiVersion": "2021-02-01-preview",
+              "name": "[parameters('sqlServerName')]",
+              "tags": {
+                "[format('{0}', variables('tagName'))]": "[variables('tagValue')]"
+              },
+              "location": "[parameters('location')]",
+              "properties": {
+                "administratorLogin": "[parameters('sqlAdminUserName')]",
+                "administratorLoginPassword": "[parameters('sqlAdminPassword')]",
+                "version": "12.0",
+                "publicNetworkAccess": "Enabled",
+                "restrictOutboundNetworkAccess": "Disabled"
+              }
+            },
+            {
+              "type": "Microsoft.Sql/servers/databases",
+              "apiVersion": "2021-02-01-preview",
+              "name": "[format('{0}/{1}', parameters('sqlServerName'), parameters('sqlDatabaseName'))]",
+              "tags": {
+                "[format('{0}', variables('tagName'))]": "[variables('tagValue')]"
+              },
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "[variables('databaseSkuName')]",
+                "tier": "[variables('databaseTierName')]",
+                "capacity": 5
+              },
+              "properties": {
+                "collation": "SQL_Latin1_General_CP1_CI_AS",
+                "maxSizeBytes": 2147483648,
+                "catalogCollation": "SQL_Latin1_General_CP1_CI_AS",
+                "zoneRedundant": false,
+                "readScale": "Disabled",
+                "requestedBackupStorageRedundancy": "Local",
+                "isLedgerOn": false
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Sql/servers', parameters('sqlServerName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "sqlUserName": {
+              "type": "string",
+              "value": "[parameters('sqlAdminUserName')]"
+            },
+            "sqlServerName": {
+              "type": "string",
+              "value": "[parameters('sqlServerName')]"
+            },
+            "sqlServerFQDN": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Sql/servers', parameters('sqlServerName')), '2021-02-01-preview').fullyQualifiedDomainName]"
+            },
+            "sqlDbName": {
+              "type": "string",
+              "value": "[parameters('sqlDatabaseName')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2020-10-01",
+      "name": "batch-account",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "tagVersion": {
+            "value": "[parameters('tagVersion')]"
+          },
+          "keyvaultName": {
+            "value": "[variables('keyVaultName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "batchAccountName": {
+            "value": "[variables('batchAccountName')]"
+          },
+          "storageAccountName": {
+            "value": "[variables('batchStorageName')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.14.85.62628",
+              "templateHash": "10049769444902647"
+            }
+          },
+          "parameters": {
+            "batchAccountName": {
+              "type": "string"
+            },
+            "storageAccountName": {
+              "type": "string"
+            },
+            "keyvaultName": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tagVersion": {
+              "type": "string"
+            },
+            "storageContainerName": {
+              "type": "string",
+              "defaultValue": "nextflow"
+            },
+            "expireTime": {
+              "type": "string",
+              "defaultValue": "[dateTimeAdd(utcNow('u'), 'P1Y')]"
+            }
+          },
+          "variables": {
+            "tagName": "[split(parameters('tagVersion'), ':')[0]]",
+            "tagValue": "[split(parameters('tagVersion'), ':')[1]]",
+            "sasTokenProps": {
+              "canonicalizedResource": "[format('/blob/{0}/{1}', parameters('storageAccountName'), parameters('storageContainerName'))]",
+              "signedResource": "c",
+              "signedProtocol": "https",
+              "signedPermission": "w",
+              "signedServices": "b",
+              "signedExpiry": "[parameters('expireTime')]"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2021-06-01",
+              "name": "[parameters('storageAccountName')]",
+              "location": "[parameters('location')]",
+              "tags": {
+                "ObjectName": "[parameters('batchAccountName')]",
+                "[format('{0}', variables('tagName'))]": "[variables('tagValue')]"
+              },
+              "kind": "StorageV2",
+              "sku": {
+                "name": "Standard_LRS"
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices",
+              "apiVersion": "2021-08-01",
+              "name": "[format('{0}/default', parameters('storageAccountName'))]",
+              "properties": {
+                "cors": {
+                  "corsRules": [
+                    {
+                      "allowedHeaders": [
+                        "*"
+                      ],
+                      "allowedMethods": [
+                        "GET",
+                        "HEAD",
+                        "MERGE",
+                        "OPTIONS",
+                        "POST",
+                        "PUT"
+                      ],
+                      "allowedOrigins": [
+                        "*"
+                      ],
+                      "exposedHeaders": [
+                        "*"
+                      ],
+                      "maxAgeInSeconds": 3600
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2021-08-01",
+              "name": "[format('{0}/default/{1}', parameters('storageAccountName'), parameters('storageContainerName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Batch/batchAccounts",
+              "apiVersion": "2021-06-01",
+              "name": "[parameters('batchAccountName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "autoStorage": {
+                  "storageAccountId": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+                }
+              },
+              "tags": {
+                "ObjectName": "[parameters('batchAccountName')]",
+                "[format('{0}', variables('tagName'))]": "[variables('tagValue')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2021-10-01",
+              "name": "[format('{0}/batch-key', parameters('keyvaultName'))]",
+              "properties": {
+                "value": "[listKeys(resourceId('Microsoft.Batch/batchAccounts', parameters('batchAccountName')), '2021-06-01').primary]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Batch/batchAccounts', parameters('batchAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2021-10-01",
+              "name": "[format('{0}/storage-key', parameters('keyvaultName'))]",
+              "properties": {
+                "value": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2021-06-01').keys[0].value]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2021-10-01",
+              "name": "[format('{0}/storage-sas-token', parameters('keyvaultName'))]",
+              "properties": {
+                "value": "[listServiceSAS(parameters('storageAccountName'), '2021-06-01', variables('sasTokenProps')).serviceSasToken]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "batchAccountName": {
+              "type": "string",
+              "value": "[parameters('batchAccountName')]"
+            },
+            "storageAccountName": {
+              "type": "string",
+              "value": "[parameters('storageAccountName')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2020-10-01",
+      "name": "nextflow-runner-serverless",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "tagVersion": {
+            "value": "[parameters('tagVersion')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "functionAppName": {
+            "value": "[variables('nfRunnerFunctionAppName')]"
+          },
+          "appServicePlanName": {
+            "value": "[variables('nfRunnerFuctionsAppPlanName')]"
+          },
+          "functionStorageAccountName": {
+            "value": "[variables('nfRunnerFunctionAppStorageName')]"
+          },
+          "batchStorageAccountName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'batch-account'), '2020-10-01').outputs.storageAccountName.value]"
+          },
+          "batchStorageAccountKey": {
+            "reference": {
+              "keyVault": {
+                "id": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+              },
+              "secretName": "storage-key"
+            }
+          },
+          "batchAccountName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'batch-account'), '2020-10-01').outputs.batchAccountName.value]"
+          },
+          "batchAccountKey": {
+            "reference": {
+              "keyVault": {
+                "id": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+              },
+              "secretName": "batch-key"
+            }
+          },
+          "servicePrincipalClientId": {
+            "value": "[parameters('azureClientId')]"
+          },
+          "servicePrincipalClientSecret": {
+            "value": "[parameters('azureClientSecret')]"
+          },
+          "sqlConnection": {
+            "value": "[format('Server=tcp:{0},1433;Initial Catalog={1};Persist Security Info=False;User ID={2};Password={3};MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;', reference(resourceId('Microsoft.Resources/deployments', 'hackAPI-database'), '2020-10-01').outputs.sqlServerFQDN.value, reference(resourceId('Microsoft.Resources/deployments', 'hackAPI-database'), '2020-10-01').outputs.sqlDbName.value, parameters('sqlAdminUserName'), parameters('sqlAdminPassword'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.14.85.62628",
+              "templateHash": "1876851554825786310"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tagVersion": {
+              "type": "string"
+            },
+            "functionAppName": {
+              "type": "string"
+            },
+            "appServicePlanName": {
+              "type": "string"
+            },
+            "functionStorageAccountName": {
+              "type": "string"
+            },
+            "batchStorageAccountName": {
+              "type": "string"
+            },
+            "batchStorageAccountKey": {
+              "type": "securestring"
+            },
+            "batchAccountName": {
+              "type": "string"
+            },
+            "batchAccountKey": {
+              "type": "securestring"
+            },
+            "servicePrincipalClientId": {
+              "type": "securestring"
+            },
+            "servicePrincipalClientSecret": {
+              "type": "securestring"
+            },
+            "sqlConnection": {
+              "type": "securestring"
+            }
+          },
+          "variables": {
+            "appInsightsName": "[format('{0}-ai', parameters('functionAppName'))]",
+            "tagName": "[split(parameters('tagVersion'), ':')[0]]",
+            "tagValue": "[split(parameters('tagVersion'), ':')[1]]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2021-06-01",
+              "name": "[parameters('functionStorageAccountName')]",
+              "location": "[parameters('location')]",
+              "tags": {
+                "ObjectName": "[parameters('functionAppName')]",
+                "[format('{0}', variables('tagName'))]": "[variables('tagValue')]"
+              },
+              "kind": "StorageV2",
+              "sku": {
+                "name": "Standard_LRS"
+              }
+            },
+            {
+              "type": "Microsoft.Insights/components",
+              "apiVersion": "2020-02-02",
+              "name": "[variables('appInsightsName')]",
+              "location": "[parameters('location')]",
+              "tags": {
+                "ObjectName": "[parameters('functionAppName')]",
+                "[format('{0}', variables('tagName'))]": "[variables('tagValue')]"
+              },
+              "kind": "web",
+              "properties": {
+                "Application_Type": "web",
+                "publicNetworkAccessForIngestion": "Enabled",
+                "publicNetworkAccessForQuery": "Enabled"
+              }
+            },
+            {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2020-12-01",
+              "name": "[parameters('appServicePlanName')]",
+              "location": "[parameters('location')]",
+              "tags": {
+                "[format('{0}', variables('tagName'))]": "[variables('tagValue')]"
+              },
+              "kind": "functionapp",
+              "sku": {
+                "name": "Y1"
+              },
+              "properties": {}
+            },
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2020-12-01",
+              "name": "[parameters('functionAppName')]",
+              "location": "[parameters('location')]",
+              "tags": {
+                "[format('{0}', variables('tagName'))]": "[variables('tagValue')]"
+              },
+              "kind": "functionapp",
+              "properties": {
+                "siteConfig": {
+                  "appSettings": [
+                    {
+                      "name": "AzureWebJobsStorage",
+                      "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};EndpointSuffix={1};AccountKey={2}', parameters('functionStorageAccountName'), environment().suffixes.storage, listKeys(resourceId('Microsoft.Storage/storageAccounts', parameters('functionStorageAccountName')), '2021-06-01').keys[0].value)]"
+                    },
+                    {
+                      "name": "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING",
+                      "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};EndpointSuffix={1};AccountKey={2}', parameters('functionStorageAccountName'), environment().suffixes.storage, listKeys(resourceId('Microsoft.Storage/storageAccounts', parameters('functionStorageAccountName')), '2021-06-01').keys[0].value)]"
+                    },
+                    {
+                      "name": "FUNCTIONS_WORKER_RUNTIME",
+                      "value": "dotnet"
+                    },
+                    {
+                      "name": "FUNCTIONS_EXTENSION_VERSION",
+                      "value": "~4"
+                    },
+                    {
+                      "name": "APPINSIGHTS_INSTRUMENTATIONKEY",
+                      "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').InstrumentationKey]"
+                    },
+                    {
+                      "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                      "value": "[format('InstrumentationKey={0}', reference(resourceId('Microsoft.Insights/components', variables('appInsightsName')), '2020-02-02').InstrumentationKey)]"
+                    },
+                    {
+                      "name": "ContainerConfiguration:ClientId",
+                      "value": "[parameters('servicePrincipalClientId')]"
+                    },
+                    {
+                      "name": "ContainerConfiguration:ClientSecret",
+                      "value": "[parameters('servicePrincipalClientSecret')]"
+                    },
+                    {
+                      "name": "ContainerConfiguration:TenantId",
+                      "value": "[tenant().tenantId]"
+                    },
+                    {
+                      "name": "ContainerConfiguration:SubscriptionId",
+                      "value": "[subscription().subscriptionId]"
+                    },
+                    {
+                      "name": "ContainerConfiguration:ResourceGroupName",
+                      "value": "[resourceGroup().name]"
+                    },
+                    {
+                      "name": "ConnectionStrings:DefaultConnection",
+                      "value": "[parameters('sqlConnection')]"
+                    },
+                    {
+                      "name": "ContainerConfiguration:StorageName",
+                      "value": "[parameters('batchStorageAccountName')]"
+                    },
+                    {
+                      "name": "ContainerConfiguration:StorageKey",
+                      "value": "[parameters('batchStorageAccountKey')]"
+                    },
+                    {
+                      "name": "ContainerConfiguration:BatchRegion",
+                      "value": "[parameters('location')]"
+                    },
+                    {
+                      "name": "ContainerConfiguration:BatchAccountName",
+                      "value": "[parameters('batchAccountName')]"
+                    },
+                    {
+                      "name": "ContainerConfiguration:BatchKey",
+                      "value": "[parameters('batchAccountKey')]"
+                    }
+                  ]
+                },
+                "httpsOnly": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Insights/components', variables('appInsightsName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('functionStorageAccountName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "functionAppUrl": {
+              "type": "string",
+              "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2020-12-01').defaultHostName)]"
+            },
+            "functionAppName": {
+              "type": "string",
+              "value": "[parameters('functionAppName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'batch-account')]",
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[resourceId('Microsoft.Resources/deployments', 'hackAPI-database')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2020-10-01",
+      "name": "nextflow-runner-appservice",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "tagVersion": {
+            "value": "[parameters('tagVersion')]"
+          },
+          "environmentType": {
+            "value": "[parameters('environmentType')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "nfRunnerAPIAppName": {
+            "value": "[variables('nfRunnerAPIAppName')]"
+          },
+          "nfRunnerAPIAppPlanName": {
+            "value": "[variables('nfRunnerAPIAppPlanName')]"
+          },
+          "sqlConnection": {
+            "value": "[format('Server=tcp:{0},1433;Initial Catalog={1};Persist Security Info=False;User ID={2};Password={3};MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;', reference(resourceId('Microsoft.Resources/deployments', 'hackAPI-database'), '2020-10-01').outputs.sqlServerFQDN.value, reference(resourceId('Microsoft.Resources/deployments', 'hackAPI-database'), '2020-10-01').outputs.sqlDbName.value, parameters('sqlAdminUserName'), parameters('sqlAdminPassword'))]"
+          },
+          "storageAccountName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'batch-account'), '2020-10-01').outputs.batchAccountName.value]"
+          },
+          "storagePassphrase": {
+            "value": "[parameters('storagePassphrase')]"
+          },
+          "storageSASToken": {
+            "reference": {
+              "keyVault": {
+                "id": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+              },
+              "secretName": "storage-sas-token"
+            }
+          },
+          "functionAppUrl": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'nextflow-runner-serverless'), '2020-10-01').outputs.functionAppUrl.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.14.85.62628",
+              "templateHash": "6422464455654851913"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tagVersion": {
+              "type": "string"
+            },
+            "nfRunnerAPIAppPlanName": {
+              "type": "string"
+            },
+            "nfRunnerAPIAppName": {
+              "type": "string"
+            },
+            "storageAccountName": {
+              "type": "string"
+            },
+            "storagePassphrase": {
+              "type": "securestring"
+            },
+            "storageSASToken": {
+              "type": "securestring"
+            },
+            "functionAppUrl": {
+              "type": "string"
+            },
+            "environmentType": {
+              "type": "string",
+              "allowedValues": [
+                "nonprod",
+                "prod"
+              ]
+            },
+            "sqlConnection": {
+              "type": "securestring"
+            }
+          },
+          "variables": {
+            "appServicePlanSkuName": "[if(equals(parameters('environmentType'), 'prod'), 'P2_v2', 'B1')]",
+            "appServicePlanTierName": "[if(equals(parameters('environmentType'), 'prod'), 'PremiumV2', 'Basic')]",
+            "tagName": "[split(parameters('tagVersion'), ':')[0]]",
+            "tagValue": "[split(parameters('tagVersion'), ':')[1]]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2021-01-15",
+              "name": "[parameters('nfRunnerAPIAppPlanName')]",
+              "location": "[parameters('location')]",
+              "tags": {
+                "[format('{0}', variables('tagName'))]": "[variables('tagValue')]"
+              },
+              "sku": {
+                "name": "[variables('appServicePlanSkuName')]",
+                "tier": "[variables('appServicePlanTierName')]"
+              },
+              "kind": "Linux",
+              "properties": {
+                "reserved": true
+              }
+            },
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2021-01-15",
+              "name": "[parameters('nfRunnerAPIAppName')]",
+              "location": "[parameters('location')]",
+              "tags": {
+                "[format('{0}', variables('tagName'))]": "[variables('tagValue')]"
+              },
+              "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('nfRunnerAPIAppPlanName'))]",
+                "httpsOnly": true,
+                "siteConfig": {
+                  "linuxFxVersion": "DOTNETCORE|6.0",
+                  "connectionStrings": [
+                    {
+                      "name": "DefaultConnection",
+                      "connectionString": "[parameters('sqlConnection')]",
+                      "type": "SQLAzure"
+                    }
+                  ],
+                  "appSettings": [
+                    {
+                      "name": "AzureStorage__AZURE_STORAGE_ACCOUNTNAME",
+                      "value": "[parameters('storageAccountName')]"
+                    },
+                    {
+                      "name": "AzureStorage__AZURE_STORAGE_KEY",
+                      "value": "[parameters('storagePassphrase')]"
+                    },
+                    {
+                      "name": "AzureStorage__AZURE_STORAGE_SAS",
+                      "value": "[parameters('storageSASToken')]"
+                    },
+                    {
+                      "name": "OrchestratorClientOptions__WeblogUrl",
+                      "value": "[format('{0}/api/WeblogTracer', parameters('functionAppUrl'))]"
+                    },
+                    {
+                      "name": "OrchestratorClientOptions__HttpStartUrl",
+                      "value": "[format('{0}/api/ContainerManager_HttpStart', parameters('functionAppUrl'))]"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', parameters('nfRunnerAPIAppPlanName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "appServiceAppName": {
+              "type": "string",
+              "value": "[parameters('nfRunnerAPIAppName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'batch-account')]",
+        "[resourceId('Microsoft.Resources/deployments', 'nextflow-runner-serverless')]",
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[resourceId('Microsoft.Resources/deployments', 'hackAPI-database')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "appServiceAppName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'nextflow-runner-appservice'), '2020-10-01').outputs.appServiceAppName.value]"
+    },
+    "functionAppName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'nextflow-runner-serverless'), '2020-10-01').outputs.functionAppName.value]"
+    },
+    "sqlServerFQDN": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'hackAPI-database'), '2020-10-01').outputs.sqlServerFQDN.value]"
+    },
+    "sqlServerName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'hackAPI-database'), '2020-10-01').outputs.sqlServerName.value]"
+    },
+    "sqlDbName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'hackAPI-database'), '2020-10-01').outputs.sqlDbName.value]"
+    },
+    "sqlUserName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'hackAPI-database'), '2020-10-01').outputs.sqlUserName.value]"
+    },
+    "batchAccountName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'batch-account'), '2020-10-01').outputs.batchAccountName.value]"
+    }
+  }
+}
